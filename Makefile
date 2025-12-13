@@ -53,7 +53,7 @@ OBJS += \
 else
 OBJS += \
   $K/virtio_disk.o \
-  #$K/uart.o \
+  $K/uart.o \
 
 endif
 
@@ -134,7 +134,7 @@ QEMUOPTS = -machine virt -kernel $T/kernel -m 8M -nographic
 # use multi-core 
 QEMUOPTS += -smp $(CPUS)
 
-QEMUOPTS += -bios $(RUSTSBI)
+QEMUOPTS += -bios default
 
 # import virtual disk image
 QEMUOPTS += -drive file=fs.img,if=none,format=raw,id=x0 
