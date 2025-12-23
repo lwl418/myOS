@@ -9,6 +9,11 @@
 #include "include/printf.h"
 #include "include/string.h"
 
+// Forward declarations for reference counting functions
+void incref(uint64 pa);
+void decref(uint64 pa);
+int getref(uint64 pa);
+
 /*
  * the kernel's page table.
  */
@@ -239,6 +244,7 @@ vmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
       panic("vmunmap: not a leaf");
     if(do_free){
       uint64 pa = PTE2PA(*pte);
+      // kfree now handles reference counting internally
       kfree((void*)pa);
     }
     *pte = 0;
@@ -368,39 +374,74 @@ uvmfree(pagetable_t pagetable, uint64 sz)
 // physical memory.
 // returns 0 on success, -1 on failure.
 // frees any allocated pages on failure.
+// Now uses COW - instead of copying pages,
+// both parent and child share the same physical pages.
 int
 uvmcopy(pagetable_t old, pagetable_t new, pagetable_t knew, uint64 sz)
 {
-  pte_t *pte;
+  pte_t *pte, *new_pte, *knew_pte;
   uint64 pa, i = 0, ki = 0;
   uint flags;
-  char *mem;
 
   while (i < sz){
     if((pte = walk(old, i, 0)) == NULL)
       panic("uvmcopy: pte should exist");
     if((*pte & PTE_V) == 0)
       panic("uvmcopy: page not present");
+
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == NULL)
-      goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0) {
-      kfree(mem);
+
+    // For writable pages, set COW flag and remove write permission
+    if(flags & PTE_W) {
+      flags = (flags | PTE_COW) & ~PTE_W;
+    }
+
+    // Map the same physical page in child's user page table
+    new_pte = walk(new, i, 1);
+    if(new_pte == 0) {
       goto err;
     }
+    *new_pte = PA2PTE(pa) | flags | PTE_V;
+
+    // Map in child's kernel page table (never has COW, just remove write)
+    knew_pte = walk(knew, ki, 1);
+    if(knew_pte == 0) {
+      goto err;
+    }
+    *knew_pte = PA2PTE(pa) | (flags & ~PTE_U & ~PTE_COW) | PTE_V;
+
+    // Also mark parent's pages as COW if they were writable
+    // We need to update the parent's PTE too
+    if((*pte & PTE_W) && (*pte & PTE_COW) == 0) {
+      uint parent_flags = (PTE_FLAGS(*pte) | PTE_COW) & ~PTE_W;
+      *pte = PA2PTE(pa) | parent_flags | PTE_V;
+
+      // Update parent's kernel page table too
+      struct proc *p = myproc();
+      if(p != 0) {
+        pte_t *kpte = walk(p->kpagetable, i, 0);
+        if(kpte != 0 && (*kpte & PTE_V)) {
+          *kpte = PA2PTE(pa) | (parent_flags & ~PTE_U) | PTE_V;
+        }
+      }
+    }
+
+    // Increment reference count for this shared page
+    incref(pa);
+
     i += PGSIZE;
-    if(mappages(knew, ki, PGSIZE, (uint64)mem, flags & ~PTE_U) != 0){
-      goto err;
-    }
     ki += PGSIZE;
   }
+
+  // Flush TLB for parent process (since we modified parent's PTEs)
+  sfence_vma();
+
   return 0;
 
  err:
   vmunmap(knew, 0, ki / PGSIZE, 0);
-  vmunmap(new, 0, i / PGSIZE, 1);
+  vmunmap(new, 0, i / PGSIZE, 0);  // Don't free, they're shared pages
   return -1;
 }
 
@@ -424,9 +465,18 @@ int
 copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 {
   uint64 n, va0, pa0;
+  pte_t *pte;
 
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
+
+    // Check if this is a COW page, and allocate if necessary
+    pte = walk(pagetable, va0, 0);
+    if(pte != 0 && (*pte & PTE_V) && (*pte & PTE_COW)) {
+      if(cow_alloc(pagetable, va0) < 0)
+        return -1;
+    }
+
     pa0 = walkaddr(pagetable, va0);
     if(pa0 == NULL)
       return -1;
@@ -555,6 +605,85 @@ copyinstr2(char *dst, uint64 srcva, uint64 max)
   } else {
     return -1;
   }
+}
+
+// Handle copy-on-write page allocation.
+// Called when a write is attempted on a COW page.
+// Allocates a new page and copies the content.
+// Returns 0 on success, -1 on failure.
+int
+cow_alloc(pagetable_t pagetable, uint64 va)
+{
+  pte_t *pte;
+  uint64 pa, new_pa;
+  uint flags;
+  char *new_mem;
+
+  if(va >= MAXVA)
+    return -1;
+
+  va = PGROUNDDOWN(va);
+
+  // Find the PTE
+  pte = walk(pagetable, va, 0);
+  if(pte == 0 || (*pte & PTE_V) == 0)
+    return -1;
+
+  // Check if this is a COW page
+  if((*pte & PTE_COW) == 0)
+    return -1;  // Not a COW page
+
+  pa = PTE2PA(*pte);
+  flags = PTE_FLAGS(*pte);
+
+  // Allocate a new page
+  new_mem = kalloc();
+  if(new_mem == 0)
+    return -1;
+
+  new_pa = (uint64)new_mem;
+
+  // Copy the page content
+  memmove((void*)new_pa, (void*)pa, PGSIZE);
+
+  // Update reference counts
+  decref(pa);
+
+  // Clear COW flag and add write permission
+  flags = (flags | PTE_W) & ~PTE_COW;
+
+  // Map the new page in both user and kernel page tables
+  *pte = PA2PTE(new_pa) | flags | PTE_V;
+
+  // Also update kernel page table mapping
+  struct proc *p = myproc();
+  if(p != 0) {
+    pte_t *kpte = walk(p->kpagetable, va, 0);
+    if(kpte != 0 && (*kpte & PTE_V)) {
+      *kpte = PA2PTE(new_pa) | (flags & ~PTE_U) | PTE_V;
+    }
+  }
+
+  // Flush TLB
+  sfence_vma();
+
+  return 0;
+}
+
+// Check if a page is a COW page and needs allocation on write
+int
+is_cow_page(pagetable_t pagetable, uint64 va)
+{
+  pte_t *pte;
+
+  if(va >= MAXVA)
+    return 0;
+
+  pte = walk(pagetable, va, 0);
+  if(pte == 0 || (*pte & PTE_V) == 0)
+    return 0;
+
+  return (*pte & PTE_COW) != 0;
 }
 
 // initialize kernel pagetable for each process.

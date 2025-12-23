@@ -204,6 +204,7 @@ UPROGS=\
 	$U/_usertests\
 	$U/_strace\
 	$U/_mv\
+	$U/_cowtest\
 
 	# $U/_forktest\
 	# $U/_ln\

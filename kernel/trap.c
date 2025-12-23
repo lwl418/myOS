@@ -12,8 +12,12 @@
 #include "include/console.h"
 #include "include/timer.h"
 #include "include/disk.h"
+#include "include/vm.h"
 
 extern char trampoline[], uservec[], userret[];
+
+// Forward declaration for COW allocation
+int cow_alloc(pagetable_t pagetable, uint64 va);
 
 // in kernelvec.S, calls kerneltrap().
 extern void kernelvec();
@@ -61,10 +65,10 @@ usertrap(void)
   w_stvec((uint64)kernelvec);
 
   struct proc *p = myproc();
-  
+
   // save user program counter.
   p->trapframe->epc = r_sepc();
-  
+
   if(r_scause() == 8){
     // system call
     if(p->killed)
@@ -76,10 +80,27 @@ usertrap(void)
     // so don't enable until done with those registers.
     intr_on();
     syscall();
-  } 
+  }
   else if((which_dev = devintr()) != 0){
     // ok
-  } 
+  }
+  else if(r_scause() == 13 || r_scause() == 15){
+    // Page fault - check if it's a COW page
+    uint64 va = r_stval();
+    if(is_cow_page(p->pagetable, va)) {
+      // This is a COW page fault, try to allocate a new page
+      if(cow_alloc(p->pagetable, va) < 0) {
+        printf("\nusertrap(): cow_alloc failed for va=%p pid=%d %s\n", va, p->pid, p->name);
+        printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+        p->killed = 1;
+      }
+      // If cow_alloc succeeded, just return to user space and retry
+    } else {
+      printf("\nusertrap(): unexpected page fault scause %p pid=%d %s\n", r_scause(), p->pid, p->name);
+      printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+      p->killed = 1;
+    }
+  }
   else {
     printf("\nusertrap(): unexpected scause %p pid=%d %s\n", r_scause(), p->pid, p->name);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());

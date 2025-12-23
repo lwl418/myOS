@@ -26,12 +26,77 @@ struct {
   uint64 npage;
 } kmem;
 
+// Page reference counting for COW
+#define MAX_PAGE_COUNT ((PHYSTOP - KERNBASE) / PGSIZE)
+
+struct {
+  struct spinlock lock;
+  int ref_count[MAX_PAGE_COUNT];
+} page_ref;
+
+static inline int
+pa2index(uint64 pa)
+{
+  return (pa - KERNBASE) / PGSIZE;
+}
+
+static inline uint64
+index2pa(int index)
+{
+  return KERNBASE + index * PGSIZE;
+}
+
+// Increment reference count for a physical page
+void
+incref(uint64 pa)
+{
+  acquire(&page_ref.lock);
+  int idx = pa2index(pa);
+  if (idx >= 0 && idx < MAX_PAGE_COUNT) {
+    page_ref.ref_count[idx]++;
+  }
+  release(&page_ref.lock);
+}
+
+// Decrement reference count for a physical page
+void
+decref(uint64 pa)
+{
+  acquire(&page_ref.lock);
+  int idx = pa2index(pa);
+  if (idx >= 0 && idx < MAX_PAGE_COUNT) {
+    if (page_ref.ref_count[idx] > 0) {
+      page_ref.ref_count[idx]--;
+    }
+  }
+  release(&page_ref.lock);
+}
+
+// Get reference count for a physical page
+int
+getref(uint64 pa)
+{
+  int ref = 0;
+  acquire(&page_ref.lock);
+  int idx = pa2index(pa);
+  if (idx >= 0 && idx < MAX_PAGE_COUNT) {
+    ref = page_ref.ref_count[idx];
+  }
+  release(&page_ref.lock);
+  return ref;
+}
+
 void
 kinit()
 {
   initlock(&kmem.lock, "kmem");
+  initlock(&page_ref.lock, "page_ref");
   kmem.freelist = 0;
   kmem.npage = 0;
+  // Initialize reference counts to 0
+  for (int i = 0; i < MAX_PAGE_COUNT; i++) {
+    page_ref.ref_count[i] = 0;
+  }
   freerange(kernel_end, (void*)PHYSTOP);
   #ifdef DEBUG
   printf("kernel_end: %p, phystop: %p\n", kernel_end, (void*)PHYSTOP);
@@ -56,9 +121,24 @@ void
 kfree(void *pa)
 {
   struct run *r;
-  
+
   if(((uint64)pa % PGSIZE) != 0 || (char*)pa < kernel_end || (uint64)pa >= PHYSTOP)
     panic("kfree");
+
+  // Decrement reference count, only free if count reaches 0
+  acquire(&page_ref.lock);
+  int idx = pa2index((uint64)pa);
+  if (idx >= 0 && idx < MAX_PAGE_COUNT) {
+    if (page_ref.ref_count[idx] > 0) {
+      page_ref.ref_count[idx]--;
+    }
+    if (page_ref.ref_count[idx] > 0) {
+      // Page still referenced, don't actually free it
+      release(&page_ref.lock);
+      return;
+    }
+  }
+  release(&page_ref.lock);
 
   // Fill with junk to catch dangling refs.
   memset(pa, 1, PGSIZE);
@@ -88,8 +168,16 @@ kalloc(void)
   }
   release(&kmem.lock);
 
-  if(r)
+  if(r) {
     memset((char*)r, 5, PGSIZE); // fill with junk
+    // Initialize reference count to 1
+    acquire(&page_ref.lock);
+    int idx = pa2index((uint64)r);
+    if (idx >= 0 && idx < MAX_PAGE_COUNT) {
+      page_ref.ref_count[idx] = 1;
+    }
+    release(&page_ref.lock);
+  }
   return (void*)r;
 }
 
