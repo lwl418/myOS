@@ -9,8 +9,21 @@
 #include "include/fat32.h"
 #include "include/string.h"
 #include "include/printf.h"
+#include "include/timer.h"
 
 /* fields that start with "_" are something we don't use */
+
+// 将rtc_time转换为FAT32时间格式 (HH:MM:SS)
+// FAT32时间格式：高5位小时，中6位分钟，低5位秒（秒值乘以2）
+static uint16 rtc_to_fat32_time(struct rtc_time *time) {
+    return ((time->hour & 0x1F) << 11) | ((time->min & 0x3F) << 5) | ((time->sec / 2) & 0x1F);
+}
+
+// 将rtc_time转换为FAT32日期格式 (YYYY/MM/DD)
+// FAT32日期格式：高7位年（减去1980），中4位月，低5位日
+static uint16 rtc_to_fat32_date(struct rtc_time *time) {
+    return (((time->year - 1980) & 0x7F) << 9) | ((time->month & 0x0F) << 5) | (time->day & 0x1F);
+}
 
 typedef struct short_name_entry {
     char        name[CHAR_SHORT_NAME];
@@ -359,8 +372,13 @@ int ewrite(struct dirent *entry, int user_src, uint64 src, uint off, uint n)
     if(n > 0) {
         if(off > entry->file_size) {
             entry->file_size = off;
-            entry->dirty = 1;
         }
+        // 从实时时钟获取当前时间并更新修改时间戳
+        struct rtc_time current_time;
+        rtc_get_time(&current_time);
+        entry->last_write_time = rtc_to_fat32_time(&current_time);
+        entry->last_write_date = rtc_to_fat32_date(&current_time);
+        entry->dirty = 1;
     }
     return tot;
 }
@@ -536,7 +554,13 @@ void emake(struct dirent *dp, struct dirent *ep, uint off)
         memset(&de, 0, sizeof(de));
         strncpy(de.sne.name, shortname, sizeof(de.sne.name));
         de.sne.attr = ep->attribute;
+        de.sne._crt_time_tenth = ep->create_time_tenth;
+        de.sne._crt_time = ep->create_time;
+        de.sne._crt_date = ep->create_date;
+        de.sne._lst_acce_date = ep->last_access_date;
         de.sne.fst_clus_hi = (uint16)(ep->first_clus >> 16);      // first clus high 16 bits
+        de.sne._lst_wrt_time = ep->last_write_time;
+        de.sne._lst_wrt_date = ep->last_write_date;
         de.sne.fst_clus_lo = (uint16)(ep->first_clus & 0xffff);     // low 16 bits
         de.sne.file_size = ep->file_size;                         // filesize is updated in eupdate()
         off = reloc_clus(dp, off, 1);
@@ -580,6 +604,19 @@ struct dirent *ealloc(struct dirent *dp, char *name, int attr)
     } else {
         ep->attribute |= ATTR_ARCHIVE;
     }
+
+    // 从实时时钟获取当前时间
+    struct rtc_time current_time;
+    rtc_get_time(&current_time);
+
+    // 设置时间戳
+    ep->create_time_tenth = 0x00;
+    ep->create_time = rtc_to_fat32_time(&current_time);
+    ep->create_date = rtc_to_fat32_date(&current_time);
+    ep->last_access_date = rtc_to_fat32_date(&current_time);
+    ep->last_write_time = rtc_to_fat32_time(&current_time);
+    ep->last_write_date = rtc_to_fat32_date(&current_time);
+
     emake(dp, ep, off);
     ep->valid = 1;
     eunlock(ep);
@@ -608,9 +645,16 @@ void eupdate(struct dirent *entry)
     off = reloc_clus(entry->parent, entry->off + (entcnt << 5), 0);
     union dentry de;
     rw_clus(entry->parent->cur_clus, 0, 0, (uint64)&de, off, sizeof(de));
+
+    // Update cluster information
     de.sne.fst_clus_hi = (uint16)(entry->first_clus >> 16);
     de.sne.fst_clus_lo = (uint16)(entry->first_clus & 0xffff);
     de.sne.file_size = entry->file_size;
+
+    // Update time fields
+    de.sne._lst_wrt_time = entry->last_write_time;
+    de.sne._lst_wrt_date = entry->last_write_date;
+
     rw_clus(entry->parent->cur_clus, 1, 0, (uint64)&de, off, sizeof(de));
     entry->dirty = 0;
 }
@@ -704,9 +748,14 @@ void eput(struct dirent *entry)
 void estat(struct dirent *de, struct stat *st)
 {
     strncpy(st->name, de->filename, STAT_MAX_NAME);
+    st->name[STAT_MAX_NAME] = '\0';  // Ensure null termination
     st->type = (de->attribute & ATTR_DIRECTORY) ? T_DIR : T_FILE;
     st->dev = de->dev;
     st->size = de->file_size;
+    st->create_time = de->create_time;
+    st->create_date = de->create_date;
+    st->last_write_time = de->last_write_time;
+    st->last_write_date = de->last_write_date;
 }
 
 /**
@@ -752,6 +801,15 @@ static void read_entry_info(struct dirent *entry, union dentry *d)
     entry->attribute = d->sne.attr;
     entry->first_clus = ((uint32)d->sne.fst_clus_hi << 16) | d->sne.fst_clus_lo;
     entry->file_size = d->sne.file_size;
+
+    // Copy time fields from disk entry to dirent
+    entry->create_time_tenth = d->sne._crt_time_tenth;
+    entry->create_time = d->sne._crt_time;
+    entry->create_date = d->sne._crt_date;
+    entry->last_access_date = d->sne._lst_acce_date;
+    entry->last_write_time = d->sne._lst_wrt_time;
+    entry->last_write_date = d->sne._lst_wrt_date;
+
     entry->cur_clus = entry->first_clus;
     entry->clus_cnt = 0;
 }

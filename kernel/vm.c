@@ -495,12 +495,7 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 int
 copyout2(uint64 dstva, char *src, uint64 len)
 {
-  uint64 sz = myproc()->sz;
-  if (dstva + len > sz || dstva >= sz) {
-    return -1;
-  }
-  memmove((void *)dstva, src, len);
-  return 0;
+  return copyout(myproc()->pagetable, dstva, src, len);
 }
 
 // Copy from user to kernel.
@@ -531,12 +526,7 @@ copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 int
 copyin2(char *dst, uint64 srcva, uint64 len)
 {
-  uint64 sz = myproc()->sz;
-  if (srcva + len > sz || srcva >= sz) {
-    return -1;
-  }
-  memmove(dst, (void *)srcva, len);
-  return 0;
+  return copyin(myproc()->pagetable, dst, srcva, len);
 }
 
 // Copy a null-terminated string from user to kernel.

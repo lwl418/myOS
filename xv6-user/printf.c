@@ -13,10 +13,10 @@ putc(int fd, char c)
 }
 
 static void
-printint(int fd, int xx, int base, int sgn)
+printint(int fd, int xx, int base, int sgn, int width, int zero_pad)
 {
   char buf[16];
-  int i, neg;
+  int i, neg, len, pad;
   uint x;
 
   neg = 0;
@@ -34,6 +34,21 @@ printint(int fd, int xx, int base, int sgn)
   if(neg)
     buf[i++] = '-';
 
+  len = i;
+  pad = (width > len) ? width - len : 0;
+
+  // Print padding characters
+  if (!zero_pad) {
+    for (int p = 0; p < pad; p++)
+      putc(fd, ' ');
+  }
+
+  // Print zero padding if enabled
+  if (zero_pad) {
+    for (int p = 0; p < pad; p++)
+      putc(fd, '0');
+  }
+
   while(--i >= 0)
     putc(fd, buf[i]);
 }
@@ -47,49 +62,69 @@ printptr(int fd, uint64 x) {
     putc(fd, digits[x >> (sizeof(uint64) * 8 - 4)]);
 }
 
-// Print to the given fd. Only understands %d, %x, %p, %s.
+// Print to the given fd. Supports %d, %x, %p, %s, %c, %%, %ld, %04d, %4d, etc.
 void
 vprintf(int fd, const char *fmt, va_list ap)
 {
   char *s;
   int c, i, state;
+  int width;      // Width specifier
+  int zero_pad;   // Zero padding flag
 
   state = 0;
+  width = 0;
+  zero_pad = 0;
+
   for(i = 0; fmt[i]; i++){
     c = fmt[i] & 0xff;
+
     if(state == 0){
       if(c == '%'){
         state = '%';
+        width = 0;
+        zero_pad = 0;
       } else {
         putc(fd, c);
       }
     } else if(state == '%'){
-      if(c == 'd'){
-        printint(fd, va_arg(ap, int), 10, 1);
-      } else if(c == 'l') {
-        printint(fd, va_arg(ap, uint64), 10, 0);
-      } else if(c == 'x') {
-        printint(fd, va_arg(ap, int), 16, 0);
-      } else if(c == 'p') {
-        printptr(fd, va_arg(ap, uint64));
-      } else if(c == 's'){
-        s = va_arg(ap, char*);
-        if(s == 0)
-          s = "(null)";
-        while(*s != 0){
-          putc(fd, *s);
-          s++;
+      if(c >= '0' && c <= '9'){
+        if (c == '0' && width == 0) {
+          zero_pad = 1;  // Zero padding
+        } else {
+          width = width * 10 + (c - '0');  // Width specifier
         }
-      } else if(c == 'c'){
-        putc(fd, va_arg(ap, uint));
-      } else if(c == '%'){
-        putc(fd, c);
       } else {
-        // Unknown % sequence.  Print it to draw attention.
-        putc(fd, '%');
-        putc(fd, c);
+        // Process the format specifier
+        if(c == 'd'){
+          printint(fd, va_arg(ap, int), 10, 1, width, zero_pad);
+        } else if(c == 'l') {
+          // Handle long format by casting, since our printint doesn't support 64-bit yet
+          printint(fd, (int)va_arg(ap, uint64), 10, 0, width, zero_pad);
+        } else if(c == 'x') {
+          printint(fd, va_arg(ap, int), 16, 0, width, zero_pad);
+        } else if(c == 'p') {
+          printptr(fd, va_arg(ap, uint64));
+        } else if(c == 's'){
+          s = va_arg(ap, char*);
+          if(s == 0)
+            s = "(null)";
+          while(*s != 0){
+            putc(fd, *s);
+            s++;
+          }
+        } else if(c == 'c'){
+          putc(fd, va_arg(ap, uint));
+        } else if(c == '%'){
+          putc(fd, c);
+        } else {
+          // Unknown % sequence.  Print it to draw attention.
+          putc(fd, '%');
+          putc(fd, c);
+        }
+        state = 0;
+        width = 0;
+        zero_pad = 0;
       }
-      state = 0;
     }
   }
 }

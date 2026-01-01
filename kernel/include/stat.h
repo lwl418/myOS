@@ -12,6 +12,10 @@ struct stat {
   int dev;     // File system's disk device
   short type;  // Type of file
   uint64 size; // Size of file in bytes
+  uint16 create_time; // File creation time in FAT32 format
+  uint16 create_date; // File creation date in FAT32 format
+  uint16 last_write_time; // Last write time in FAT32 format
+  uint16 last_write_date; // Last write date in FAT32 format
 };
 
 // struct stat {

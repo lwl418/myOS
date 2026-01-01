@@ -64,9 +64,8 @@ RUSTSBI = ./bootloader/SBI/sbi-k210
 else
 RUSTSBI = ./bootloader/SBI/sbi-qemu
 endif
-
-# TOOLPREFIX	:= riscv64-unknown-elf-
-TOOLPREFIX	:= riscv64-linux-gnu-
+ TOOLPREFIX	:= riscv64-unknown-elf-
+#TOOLPREFIX	:= riscv64-linux-gnu-
 CC = $(TOOLPREFIX)gcc
 AS = $(TOOLPREFIX)gas
 LD = $(TOOLPREFIX)ld
@@ -205,6 +204,7 @@ UPROGS=\
 	$U/_strace\
 	$U/_mv\
 	$U/_cowtest\
+	$U/_rtc\
 
 	# $U/_forktest\
 	# $U/_ln\

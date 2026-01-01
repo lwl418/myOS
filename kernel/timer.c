@@ -13,6 +13,93 @@
 struct spinlock tickslock;
 uint ticks;
 
+// 系统启动时间：2023年12月25日10:30:00
+#define SYSTEM_START_YEAR  2023
+#define SYSTEM_START_MONTH 12
+#define SYSTEM_START_DAY   25
+#define SYSTEM_START_HOUR  10
+#define SYSTEM_START_MIN   30
+#define SYSTEM_START_SEC   0
+
+// 时钟频率：390MHz
+#define CLOCK_FREQUENCY 390000000ULL  // 390,000,000 Hz
+
+// 每月的天数
+static const int days_in_month[] = {0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+
+// 判断是否为闰年
+static int is_leap_year(int year) {
+    if (year % 4 != 0) return 0;
+    if (year % 100 != 0) return 1;
+    if (year % 400 != 0) return 0;
+    return 1;
+}
+
+// 获取当前时间（纳秒）
+uint64 get_current_time_ns() {
+    return r_time() * (1000000000ULL / CLOCK_FREQUENCY);  // 将周期转换为纳秒
+}
+
+// 获取当前时间（秒）
+uint64 get_current_time_s() {
+    return r_time() / CLOCK_FREQUENCY;  // 将周期转换为秒
+}
+
+// 获取当前日期和时间
+void rtc_get_time(struct rtc_time *time) {
+    if (time == NULL) return;
+
+    // 计算自系统启动以来的秒数
+    uint64 elapsed_sec = get_current_time_s();
+
+    // 初始化时间为系统启动时间
+    time->year = SYSTEM_START_YEAR;
+    time->month = SYSTEM_START_MONTH;
+    time->day = SYSTEM_START_DAY;
+    time->hour = SYSTEM_START_HOUR;
+    time->min = SYSTEM_START_MIN;
+    time->sec = SYSTEM_START_SEC;
+
+    // 添加经过的秒数
+    time->sec += elapsed_sec;
+
+    // 转换为正确的时间格式
+    while (time->sec >= 60) {
+        time->sec -= 60;
+        time->min++;
+    }
+
+    while (time->min >= 60) {
+        time->min -= 60;
+        time->hour++;
+    }
+
+    while (time->hour >= 24) {
+        time->hour -= 24;
+        time->day++;
+    }
+
+    // 处理月份和年份
+    while (1) {
+        int days = days_in_month[time->month];
+        if (time->month == 2 && is_leap_year(time->year)) {
+            days++;
+        }
+
+        if (time->day <= days) {
+            break;
+        }
+
+        time->day -= days;
+        time->month++;
+
+        if (time->month > 12) {
+            time->month = 1;
+            time->year++;
+        }
+    }
+}
+
 void timerinit() {
     initlock(&tickslock, "time");
     #ifdef DEBUG
