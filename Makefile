@@ -229,6 +229,7 @@ fs: $(UPROGS)
 		mkfs.vfat -F 32 fs.img; fi
 	@sudo mount fs.img $(dst)
 	@if [ ! -d "$(dst)/bin" ]; then sudo mkdir $(dst)/bin; fi
+	# 直接保存CST时间到FAT32，不转换为UTC
 	@sudo cp README $(dst)/README && sudo touch -r README $(dst)/README
 	@for file in $$( ls $U/_* ); do \
 		sudo cp $$file $(dst)/$${file#$U/_} && sudo touch -r $$file $(dst)/$${file#$U/_};\

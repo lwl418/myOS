@@ -14,22 +14,22 @@ uint ticks;
 
 // 系统启动时间：从Makefile中传入的实时本地时间
 #ifndef SYSTEM_START_YEAR
-#define SYSTEM_START_YEAR  2026
+#define SYSTEM_START_YEAR 2026
 #endif
 #ifndef SYSTEM_START_MONTH
 #define SYSTEM_START_MONTH 1
 #endif
 #ifndef SYSTEM_START_DAY
-#define SYSTEM_START_DAY   1
+#define SYSTEM_START_DAY 1
 #endif
 #ifndef SYSTEM_START_HOUR
-#define SYSTEM_START_HOUR  0
+#define SYSTEM_START_HOUR 0
 #endif
 #ifndef SYSTEM_START_MIN
-#define SYSTEM_START_MIN   0
+#define SYSTEM_START_MIN 0
 #endif
 #ifndef SYSTEM_START_SEC
-#define SYSTEM_START_SEC   0
+#define SYSTEM_START_SEC 0
 #endif
 
 // 时钟频率：QEMU中rdtime的默认频率是10MHz
@@ -81,9 +81,6 @@ void rtc_get_time(struct rtc_time *time)
 
     // 添加经过的秒数
     time->sec += elapsed_sec;
-
-    // 转换为UTC+8时间（中国标准时间）
-    time->hour += 8;
 
     // 转换为正确的时间格式
     while (time->sec >= 60)

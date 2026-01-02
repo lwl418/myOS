@@ -16,7 +16,10 @@
 // 将rtc_time转换为FAT32时间格式 (HH:MM:SS)
 // FAT32时间格式：高5位小时，中6位分钟，低5位秒（秒值乘以2）
 static uint16 rtc_to_fat32_time(struct rtc_time *time) {
-    return ((time->hour & 0x1F) << 11) | ((time->min & 0x3F) << 5) | ((time->sec / 2) & 0x1F);
+    int hour = time->hour;
+    // 转换为UTC时间（CST - 8小时）
+    hour = (hour - 8 + 24) % 24;
+    return ((hour & 0x1F) << 11) | ((time->min & 0x3F) << 5) | ((time->sec / 2) & 0x1F);
 }
 
 // 将rtc_time转换为FAT32日期格式 (YYYY/MM/DD)

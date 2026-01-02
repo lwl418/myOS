@@ -7,6 +7,8 @@ char*
 fmttime(uint16 time) {
   static char buf[9];  // Format: HH:MM:SS + null terminator
   int hour = (time >> 11) & 0x1F;
+  // 转换为CST时间（UTC + 8小时）
+  hour = (hour + 8) % 24;
   int min = (time >> 5) & 0x3F;
   int sec = (time & 0x1F) * 2;  // seconds are stored multiplied by 2
 

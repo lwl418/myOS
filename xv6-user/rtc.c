@@ -1,12 +1,24 @@
 #include "xv6-user/user.h"
 
 // 系统启动时间：将在Makefile中自动注入
-#define SYSTEM_START_YEAR 2023
-#define SYSTEM_START_MONTH 12
-#define SYSTEM_START_DAY 25
-#define SYSTEM_START_HOUR 10
-#define SYSTEM_START_MIN 30
+#ifndef SYSTEM_START_YEAR
+#define SYSTEM_START_YEAR 2026
+#endif
+#ifndef SYSTEM_START_MONTH
+#define SYSTEM_START_MONTH 1
+#endif
+#ifndef SYSTEM_START_DAY
+#define SYSTEM_START_DAY 1
+#endif
+#ifndef SYSTEM_START_HOUR
+#define SYSTEM_START_HOUR 0
+#endif
+#ifndef SYSTEM_START_MIN
+#define SYSTEM_START_MIN 0
+#endif
+#ifndef SYSTEM_START_SEC
 #define SYSTEM_START_SEC 0
+#endif
 
 // 每月的天数
 static const int days_in_month[] = {0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
