@@ -677,9 +677,70 @@ struct dirent *ealloc(struct dirent *dp, char *name, int attr)
     }
     struct dirent *ep;
     uint off = 0;
-    if ((ep = dirlookup(dp, name, &off)) != 0)
+    char unique_name[FAT32_MAX_FILENAME + 1];
+
+    // Try original name first
+    strncpy(unique_name, name, FAT32_MAX_FILENAME);
+    unique_name[FAT32_MAX_FILENAME] = '\0';
+
+    if ((ep = dirlookup(dp, unique_name, &off)) != 0)
     { // entry exists
-        return ep;
+        // Generate unique name by appending _1, _2, etc.
+        // Format: name_1, name_2, ..., name_9999
+        int i;
+        for (i = 1; i <= 9999; i++) {
+            // Create unique name by manual string concatenation
+            char num_str[10];
+            int num_len = 0;
+            int temp_num = i;
+
+            // Convert integer to string
+            num_str[num_len++] = '_';
+            char reverse_num[10];
+            int rev_len = 0;
+            do {
+                reverse_num[rev_len++] = '0' + (temp_num % 10);
+                temp_num /= 10;
+            } while (temp_num > 0);
+
+            for (int j = rev_len - 1; j >= 0; j--) {
+                num_str[num_len++] = reverse_num[j];
+            }
+            num_str[num_len] = '\0';
+
+            // Combine name and number string
+            int name_len = strlen(name);
+            int num_str_len = strlen(num_str);
+
+            // Combine strings manually without strncat
+            int total_len = name_len + num_str_len;
+            if (total_len > FAT32_MAX_FILENAME) {
+                // Truncate name part if necessary
+                name_len = FAT32_MAX_FILENAME - num_str_len;
+            }
+            // Copy base name
+            for (int j = 0; j < name_len; j++) {
+                unique_name[j] = name[j];
+            }
+            // Append number string
+            for (int j = 0; j < num_str_len && (name_len + j) < FAT32_MAX_FILENAME; j++) {
+                unique_name[name_len + j] = num_str[j];
+            }
+            // Null terminate
+            int final_len = (total_len < FAT32_MAX_FILENAME) ? total_len : FAT32_MAX_FILENAME;
+            unique_name[final_len] = '\0';
+
+            // Check if this unique name exists
+            if (dirlookup(dp, unique_name, &off) == NULL) {
+                // Found a unique name
+                break;
+            }
+        }
+
+        if (i > 9999) {
+            // Failed to generate unique name after 9999 tries
+            return NULL;
+        }
     }
     ep = eget(dp, name);
     elock(ep);
@@ -691,7 +752,7 @@ struct dirent *ealloc(struct dirent *dp, char *name, int attr)
     ep->clus_cnt = 0;
     ep->cur_clus = 0;
     ep->dirty = 0;
-    strncpy(ep->filename, name, FAT32_MAX_FILENAME);
+    strncpy(ep->filename, unique_name, FAT32_MAX_FILENAME);
     ep->filename[FAT32_MAX_FILENAME] = '\0';
     if (attr == ATTR_DIRECTORY)
     { // generate "." and ".." for ep
