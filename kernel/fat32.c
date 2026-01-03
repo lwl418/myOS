@@ -603,8 +603,120 @@ void emake(struct dirent *dp, struct dirent *ep, uint off)
     {
         int entcnt = (strlen(ep->filename) + CHAR_LONG_NAME - 1) / CHAR_LONG_NAME; // count of l-n-entries, rounds up
         char shortname[CHAR_SHORT_NAME + 1];
+        char base_shortname[CHAR_SHORT_NAME + 1];
         memset(shortname, 0, sizeof(shortname));
-        generate_shortname(shortname, ep->filename);
+        generate_shortname(base_shortname, ep->filename);
+        // Check for duplicate short names in the directory and generate a unique one
+        // Create a copy of the base shortname
+        memcpy(shortname, base_shortname, CHAR_SHORT_NAME);
+
+        // Now check for duplicates and generate unique shortname
+        struct dirent temp_dirent;
+        int found_duplicate = 0;
+        int suffix_num = 1;
+
+        do {
+            // Assume no duplicate found
+            found_duplicate = 0;
+
+            // Read through the directory to check if shortname exists
+            uint temp_off = 64; // Skip "." and ".." entries
+            int count = 0;
+
+            temp_dirent.valid = 0;
+            temp_dirent.dev = dp->dev;
+            temp_dirent.cur_clus = dp->first_clus;
+            temp_dirent.clus_cnt = dp->clus_cnt;
+
+            while (1) {
+                int ret = enext(dp, &temp_dirent, temp_off, &count);
+                if (ret == -1 || ret == 0) {
+                    // End of directory or empty slot found
+                    break;
+                }
+
+                // Generate shortname for this existing entry
+                char entry_shortname[CHAR_SHORT_NAME + 1];
+                generate_shortname(entry_shortname, temp_dirent.filename);
+
+                // Compare with current shortname
+                if (memcmp(entry_shortname, shortname, CHAR_SHORT_NAME) == 0) {
+                    found_duplicate = 1;
+                    break;
+                }
+
+                // Move to next entry
+                temp_off += sizeof(union dentry) * count;
+                temp_dirent.valid = 0; // Reset for next enext call
+            }
+
+            if (found_duplicate) {
+                // Need to generate a new shortname with suffix
+
+                // Extract base name and extension parts
+                char base_name[8 + 1];  // 8 chars + null
+                char ext[3 + 1];        // 3 chars + null
+
+                memcpy(base_name, base_shortname, 8);
+                base_name[8] = '\0';
+
+                memcpy(ext, base_shortname + 8, 3);
+                ext[3] = '\0';
+
+                // Create numbered suffix
+                char suffix[6];  // ~99999\0
+                suffix[0] = '~';
+
+                // Convert suffix_num to string
+                char num_str[5];
+                int num_len = 0;
+                int temp_num = suffix_num;
+
+                do {
+                    num_str[num_len++] = '0' + (temp_num % 10);
+                    temp_num /= 10;
+                } while (temp_num > 0);
+
+                // Reverse to get correct order
+                for (int j = 0; j < num_len; j++) {
+                    suffix[1 + j] = num_str[num_len - 1 - j];
+                }
+                suffix[1 + num_len] = '\0';
+
+                // Create new shortname with suffix
+                int new_len;
+
+                // Copy the first part of base name, reserving space for suffix
+                int base_len = 8 - strlen(suffix);
+                if (base_len < 1) {
+                    // If base name is too long, truncate it
+                    base_len = 1;
+                }
+
+                memcpy(shortname, base_shortname, base_len);
+
+                // Insert the suffix
+                memcpy(shortname + base_len, suffix, strlen(suffix));
+
+                // Fill the rest with spaces
+                for (new_len = base_len + strlen(suffix); new_len < 8; new_len++) {
+                    shortname[new_len] = ' ';
+                }
+
+                // Append the extension
+                memcpy(shortname + 8, ext, 3);
+
+                // Increment suffix number for next iteration
+                suffix_num++;
+
+                // Max suffix number is 9999 to avoid too long suffix
+                if (suffix_num > 9999) {
+                    panic("Too many duplicate short names");
+                }
+            }
+        } while (found_duplicate);
+
+        // Now generate checksum for the final unique shortname
         de.lne.checksum = cal_checksum((uchar *)shortname);
         de.lne.attr = ATTR_LONG_NAME;
         for (int i = entcnt; i > 0; i--)
