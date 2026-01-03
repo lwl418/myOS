@@ -10,6 +10,7 @@
 #include "include/string.h"
 #include "include/printf.h"
 #include "include/timer.h"
+#include "include/kalloc.h"
 
 /* fields that start with "_" are something we don't use */
 
@@ -64,6 +65,28 @@ union dentry
     long_name_entry_t lne;
 };
 
+// Use memmove since memcpy is giving warnings
+#define memcpy(dest, src, n) memmove(dest, src, n)
+
+// FAT cache configuration
+#define FAT_CACHE_SIZE 32  // Number of sectors to cache
+
+static struct fat_cache_entry {
+    uint32 sector;           // FAT table sector number
+    uint8  data[BSIZE];      // Sector data (BSIZE is already defined as 512)
+    uint64 last_access_time; // Last access time in nanoseconds
+    struct fat_cache_entry *next; // For LRU linked list
+    struct fat_cache_entry *prev; // For LRU linked list
+};
+
+static struct fat_cache {
+    struct fat_cache_entry entries[FAT_CACHE_SIZE]; // Cache entries array
+    int capacity;                     // Cache capacity
+    struct fat_cache_entry *head;     // LRU list head (most recently used)
+    struct fat_cache_entry *tail;     // LRU list tail (least recently used)
+    struct spinlock lock;             // Cache lock for concurrent access
+} fcache;
+
 static struct
 {
     uint32 first_data_sec;
@@ -90,6 +113,138 @@ static struct entry_cache
     struct spinlock lock;
     struct dirent entries[ENTRY_CACHE_NUM];
 } ecache;
+
+// Initialize the FAT cache
+static void fat_cache_init(void) {
+    fcache.capacity = FAT_CACHE_SIZE;
+
+    // Initialize LRU list pointers
+    fcache.head = NULL;
+    fcache.tail = NULL;
+
+    // Initialize all sector numbers to invalid (0 is a valid sector, but we use 0xffffffff to indicate invalid)
+    for (int i = 0; i < fcache.capacity; i++) {
+        fcache.entries[i].sector = 0xffffffff;  // Invalid sector
+        fcache.entries[i].next = NULL;
+        fcache.entries[i].prev = NULL;
+        memset(fcache.entries[i].data, 0, BSIZE);  // Initialize data to 0
+    }
+
+    initlock(&fcache.lock, "fatcache");
+}
+
+// Remove an entry from the LRU list
+static void fat_cache_remove_from_list(struct fat_cache_entry *entry) {
+    if (entry->prev) {
+        entry->prev->next = entry->next;
+    } else {
+        fcache.head = entry->next;  // Entry was head
+    }
+
+    if (entry->next) {
+        entry->next->prev = entry->prev;
+    } else {
+        fcache.tail = entry->prev;  // Entry was tail
+    }
+
+    entry->next = NULL;
+    entry->prev = NULL;
+}
+
+// Add an entry to the head of the LRU list
+static void fat_cache_add_to_head(struct fat_cache_entry *entry) {
+    entry->next = fcache.head;
+    entry->prev = NULL;
+
+    if (fcache.head) {
+        fcache.head->prev = entry;
+    }
+
+    fcache.head = entry;
+
+    if (fcache.tail == NULL) {
+        fcache.tail = entry;
+    }
+}
+
+// Lookup a sector in the cache
+static struct fat_cache_entry* fat_cache_lookup(uint32 sector) {
+    acquire(&fcache.lock);
+
+    for (int i = 0; i < fcache.capacity; i++) {
+        if (fcache.entries[i].sector == sector) {
+            struct fat_cache_entry *entry = &fcache.entries[i];
+
+            // Move to head of LRU list since it's been accessed
+            fat_cache_remove_from_list(entry);
+            fat_cache_add_to_head(entry);
+
+            entry->last_access_time = get_current_time_ns();
+
+            release(&fcache.lock);
+            return entry;
+        }
+    }
+
+    release(&fcache.lock);
+    return NULL;
+}
+
+// Add a sector to the cache
+static void fat_cache_add(uint32 sector, void* data) {
+    acquire(&fcache.lock);
+
+    struct fat_cache_entry *entry = NULL;
+
+    // Find an empty entry
+    for (int i = 0; i < fcache.capacity; i++) {
+        if (fcache.entries[i].sector == 0xffffffff) {
+            entry = &fcache.entries[i];
+            break;
+        }
+    }
+
+    // If no empty entry, evict the least recently used (tail)
+    if (entry == NULL) {
+        entry = fcache.tail;
+
+        // Remove from LRU list
+        fat_cache_remove_from_list(entry);
+    }
+
+    // Update the entry
+    entry->sector = sector;
+    memmove(entry->data, data, BSIZE);
+    entry->last_access_time = get_current_time_ns();
+
+    // Add to head of LRU list
+    fat_cache_add_to_head(entry);
+
+    release(&fcache.lock);
+}
+
+// Update a sector in the cache
+static void fat_cache_update(uint32 sector, void* data) {
+    acquire(&fcache.lock);
+
+    for (int i = 0; i < fcache.capacity; i++) {
+        if (fcache.entries[i].sector == sector) {
+            struct fat_cache_entry *entry = &fcache.entries[i];
+
+            // Update data
+            memmove(entry->data, data, BSIZE);
+            entry->last_access_time = get_current_time_ns();
+
+            // Move to head of LRU list
+            fat_cache_remove_from_list(entry);
+            fat_cache_add_to_head(entry);
+
+            break;
+        }
+    }
+
+    release(&fcache.lock);
+}
 
 static struct dirent root;
 
@@ -133,6 +288,10 @@ int fat32_init()
     // make sure that byts_per_sec has the same value with BSIZE
     if (BSIZE != fat.bpb.byts_per_sec)
         panic("byts_per_sec != BSIZE");
+
+    // Initialize FAT cache
+    fat_cache_init();
+
     initlock(&ecache.lock, "ecache");
     memset(&root, 0, sizeof(root));
     initsleeplock(&root.lock, "entry");
@@ -199,9 +358,22 @@ static uint32 read_fat(uint32 cluster)
         return 0;
     }
     uint32 fat_sec = fat_sec_of_clus(cluster, 1);
-    // here should be a cache layer for FAT table, but not implemented yet.
+    uint32 fat_off = fat_offset_of_clus(cluster);
+
+    // Check if the sector is in cache
+    struct fat_cache_entry* cached_entry = fat_cache_lookup(fat_sec);
+    if (cached_entry != NULL) {
+        // Cache hit - return the data directly from cache
+        return *(uint32 *)(cached_entry->data + fat_off);
+    }
+
+    // Cache miss - read from disk
     struct buf *b = bread(0, fat_sec);
-    uint32 next_clus = *(uint32 *)(b->data + fat_offset_of_clus(cluster));
+    uint32 next_clus = *(uint32 *)(b->data + fat_off);
+
+    // Add to cache
+    fat_cache_add(fat_sec, b->data);
+
     brelse(b);
     return next_clus;
 }
@@ -218,10 +390,16 @@ static int write_fat(uint32 cluster, uint32 content)
         return -1;
     }
     uint32 fat_sec = fat_sec_of_clus(cluster, 1);
-    struct buf *b = bread(0, fat_sec);
     uint off = fat_offset_of_clus(cluster);
+
+    // Write through to disk to maintain consistency
+    struct buf *b = bread(0, fat_sec);
     *(uint32 *)(b->data + off) = content;
     bwrite(b);
+
+    // Update the cache if the sector is already cached
+    fat_cache_update(fat_sec, b->data);
+
     brelse(b);
     return 0;
 }

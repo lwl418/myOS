@@ -25,3 +25,4 @@ qemu_output.txt
 filesystem_files.md
 filesystem_status.md
 文件系统改进建议.md
+FAT表缓存实现方案.md
