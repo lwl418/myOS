@@ -8,6 +8,7 @@
 #include "include/timer.h"
 #include "include/printf.h"
 #include "include/proc.h"
+#include "include/syscall.h"
 
 struct spinlock tickslock;
 uint ticks;
@@ -31,6 +32,14 @@ uint ticks;
 #ifndef SYSTEM_START_SEC
 #define SYSTEM_START_SEC 0
 #endif
+
+// 系统启动时间：从Makefile中传入的实时本地时间
+static int system_start_year = SYSTEM_START_YEAR;
+static int system_start_month = SYSTEM_START_MONTH;
+static int system_start_day = SYSTEM_START_DAY;
+static int system_start_hour = SYSTEM_START_HOUR;
+static int system_start_min = SYSTEM_START_MIN;
+static int system_start_sec = SYSTEM_START_SEC;
 
 // 时钟频率：QEMU中rdtime的默认频率是10MHz
 #define CLOCK_FREQUENCY 10000000ULL // 10,000,000 Hz
@@ -72,12 +81,12 @@ void rtc_get_time(struct rtc_time *time)
     uint64 elapsed_sec = get_current_time_s();
 
     // 初始化时间为系统启动时间
-    time->year = SYSTEM_START_YEAR;
-    time->month = SYSTEM_START_MONTH;
-    time->day = SYSTEM_START_DAY;
-    time->hour = SYSTEM_START_HOUR;
-    time->min = SYSTEM_START_MIN;
-    time->sec = SYSTEM_START_SEC;
+    time->year = system_start_year;
+    time->month = system_start_month;
+    time->day = system_start_day;
+    time->hour = system_start_hour;
+    time->min = system_start_min;
+    time->sec = system_start_sec;
 
     // 添加经过的秒数
     time->sec += elapsed_sec;
@@ -152,4 +161,33 @@ void timer_tick()
     wakeup(&ticks);
     release(&tickslock);
     set_next_timeout();
+}
+
+// 系统调用：设置系统时间
+uint64 sys_settime(void)
+{
+    int year, month, day, hour, min, sec;
+
+    // 从用户进程获取参数
+    if(argint(0, &year) < 0 || argint(1, &month) < 0 || argint(2, &day) < 0 ||
+       argint(3, &hour) < 0 || argint(4, &min) < 0 || argint(5, &sec) < 0)
+        return -1;
+
+    // 简单的时间有效性检查
+    if(month < 1 || month > 12 || day < 1 || day > 31 ||
+       hour < 0 || hour > 23 || min < 0 || min > 59 || sec < 0 || sec > 59)
+        return -1;
+
+    // 更新全局系统时间变量
+    system_start_year = year;
+    system_start_month = month;
+    system_start_day = day;
+    system_start_hour = hour;
+    system_start_min = min;
+
+    // 我们需要将当前已经流逝的秒数减去，这样系统时间才能正确反映设置的时间
+    uint64 elapsed_sec = get_current_time_s();
+    system_start_sec = sec - elapsed_sec;
+
+    return 0;
 }

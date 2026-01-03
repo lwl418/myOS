@@ -78,9 +78,9 @@ CFLAGS += -mcmodel=medany
 CFLAGS += -ffreestanding -fno-common -nostdlib -mno-relax
 CFLAGS += -I.
 CFLAGS += $(shell $(CC) -fno-stack-protector -E -x c /dev/null >/dev/null 2>&1 && echo -fno-stack-protector)
-# 自动注入当前时间作为系统启动时间
-CFLAGS += -DSYSTEM_START_YEAR=$(shell date +%Y) -DSYSTEM_START_MONTH=$(shell date +%m) -DSYSTEM_START_DAY=$(shell date +%d)
-CFLAGS += -DSYSTEM_START_HOUR=$(shell date +%H) -DSYSTEM_START_MIN=$(shell date +%M) -DSYSTEM_START_SEC=$(shell date +%S)
+# 暂时禁用自动注入，将在编译后由timer.c的默认值处理
+CFLAGS += -DSYSTEM_START_YEAR=$(shell date +%Y) -DSYSTEM_START_MONTH=$(shell date +%1m) -DSYSTEM_START_DAY=$(shell date +%1d)
+CFLAGS += -DSYSTEM_START_HOUR=$(shell date +%1H) -DSYSTEM_START_MIN=$(shell date +%1M) -DSYSTEM_START_SEC=$(shell date +%1S)
 
 ifeq ($(mode), debug) 
 CFLAGS += -DDEBUG 
@@ -208,6 +208,7 @@ UPROGS=\
 	$U/_mv\
 	$U/_cowtest\
 	$U/_rtc\
+	$U/_settimeddemo\
 
 	# $U/_forktest\
 	# $U/_ln\
