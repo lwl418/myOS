@@ -209,6 +209,7 @@ UPROGS=\
 	$U/_cowtest\
 	$U/_rtc\
 	$U/_settimeddemo\
+	$U/_cachetest\
 
 	# $U/_forktest\
 	# $U/_ln\
