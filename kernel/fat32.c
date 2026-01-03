@@ -771,6 +771,10 @@ void emake(struct dirent *dp, struct dirent *ep, uint off)
     memset(&de, 0, sizeof(de));
     if (off <= 32)
     {
+        // 创建目录的.和..目录项
+        struct rtc_time current_time;
+        rtc_get_time(&current_time);
+
         if (off == 0)
         {
             strncpy(de.sne.name, ".          ", sizeof(de.sne.name));
@@ -783,6 +787,15 @@ void emake(struct dirent *dp, struct dirent *ep, uint off)
         de.sne.fst_clus_hi = (uint16)(ep->first_clus >> 16);    // first clus high 16 bits
         de.sne.fst_clus_lo = (uint16)(ep->first_clus & 0xffff); // low 16 bits
         de.sne.file_size = 0;                                   // filesize is updated in eupdate()
+
+        // 设置时间戳
+        de.sne._crt_time_tenth = 0x00;
+        de.sne._crt_time = rtc_to_fat32_time(&current_time);
+        de.sne._crt_date = rtc_to_fat32_date(&current_time);
+        de.sne._lst_acce_date = rtc_to_fat32_date(&current_time);
+        de.sne._lst_wrt_time = rtc_to_fat32_time(&current_time);
+        de.sne._lst_wrt_date = rtc_to_fat32_date(&current_time);
+
         off = reloc_clus(dp, off, 1);
         rw_clus(dp->cur_clus, 1, 0, (uint64)&de, off, sizeof(de));
     }
