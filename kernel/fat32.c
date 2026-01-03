@@ -447,6 +447,15 @@ static struct dirent *eget(struct dirent *parent, char *name)
                 {
                     ep->parent->ref++;
                 }
+
+                // 将命中的目录项移动到LRU链表的头部
+                ep->next->prev = ep->prev;
+                ep->prev->next = ep->next;
+                ep->next = root.next;
+                ep->prev = &root;
+                root.next->prev = ep;
+                root.next = ep;
+
                 release(&ecache.lock);
                 // edup(ep->parent);
                 return ep;
